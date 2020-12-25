@@ -1538,6 +1538,66 @@ const CodedBitstreamType ff_cbs_type_h265 = {
     .close             = &cbs_h265_close,
 };
 
+int ff_cbs_h265_add_sei_message(CodedBitstreamFragment *au,
+  H265RawSEIPayload *payload)
+{
+  H265RawSEI *sei = NULL;
+  int err, i, k;
+
+  // Use single SEI NAL unit to store HDR info.
+  for (i = 0; i < au->nb_units; i++) {
+    if (au->units[i].type == HEVC_NAL_SEI_PREFIX || au->units[i].type == HEVC_NAL_SEI_SUFFIX) {
+      H265RawSEI * raw_sei = (H265RawSEI *)au->units[i].content;
+      if (raw_sei) {
+        for (k = 0; k < raw_sei->payload_count; k++) {
+          if (raw_sei->payload[k].payload_type == payload->payload_type) {
+            sei = au->units[i].content;
+            if (sei->payload_count < H265_MAX_SEI_PAYLOADS)
+              break;
+            sei = NULL;
+          }
+        }
+      }
+    }
+  }
+
+  if (!sei) {
+    AVBufferRef *sei_ref;
+
+    sei = av_mallocz(sizeof(*sei));
+    if (!sei) {
+      err = AVERROR(ENOMEM);
+      goto fail;
+    }
+
+    sei->nal_unit_header.nal_unit_type = HEVC_NAL_SEI_PREFIX;
+    sei->nal_unit_header.nuh_layer_id = 0;
+    sei->nal_unit_header.nuh_temporal_id_plus1 = 1;
+    sei_ref = av_buffer_create((uint8_t*)sei, sizeof(*sei),
+      &cbs_h265_free_sei, NULL, 0);
+    if (!sei_ref) {
+      av_freep(&sei);
+      err = AVERROR(ENOMEM);
+      goto fail;
+    }
+
+    err = ff_cbs_insert_unit_content(au, i, HEVC_NAL_SEI_PREFIX,
+      sei, sei_ref);
+    av_buffer_unref(&sei_ref);
+    if (err < 0)
+      goto fail;
+  }
+
+  memcpy(&sei->payload[sei->payload_count], payload, sizeof(*payload));
+  ++sei->payload_count;
+
+  return 0;
+fail:
+  cbs_h265_free_sei_payload(payload);
+  return err;
+}
+
+
 int ff_cbs_h264_add_sei_message(CodedBitstreamFragment *au,
                                 H264RawSEIPayload *payload)
 {

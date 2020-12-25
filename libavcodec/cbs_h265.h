@@ -24,6 +24,7 @@
 
 #include "cbs_h2645.h"
 #include "hevc.h"
+#include "cbs.h"
 
 enum {
     // This limit is arbitrary - it is sufficient for one message of each
@@ -746,5 +747,6 @@ typedef struct CodedBitstreamH265Context {
     const H265RawPPS *active_pps;
 } CodedBitstreamH265Context;
 
+int ff_cbs_h265_add_sei_message(CodedBitstreamFragment *au, H265RawSEIPayload *payload);
 
 #endif /* AVCODEC_CBS_H265_H */

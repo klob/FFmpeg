@@ -25,6 +25,7 @@
 #include "cbs_h265.h"
 #include "hevc.h"
 #include "h265_profile_level.h"
+#include "hevc_sei.h"
 
 enum {
     PASS,
@@ -70,6 +71,11 @@ typedef struct H265MetadataContext {
     int level;
     int level_guess;
     int level_warned;
+
+    char * max_cll;
+    char * mastering_display_color_volume;
+    int done_first_au;
+
 } H265MetadataContext;
 
 
@@ -393,7 +399,7 @@ static int h265_metadata_filter(AVBSFContext *bsf, AVPacket *pkt)
 {
     H265MetadataContext *ctx = bsf->priv_data;
     CodedBitstreamFragment *au = &ctx->access_unit;
-    int err, i;
+    int err, i, has_sps;
 
     err = ff_bsf_get_packet_ref(bsf, pkt);
     if (err < 0)
@@ -471,7 +477,55 @@ static int h265_metadata_filter(AVBSFContext *bsf, AVPacket *pkt)
             err = h265_metadata_update_sps(bsf, au->units[i].content);
             if (err < 0)
                 goto fail;
+            has_sps = 1;
         }
+    }
+
+     if (has_sps || !ctx->done_first_au) {
+      if (ctx->max_cll) {
+        H265RawSEIPayload payload = {
+             .payload_type = HEVC_SEI_TYPE_CONTENT_LIGHT_LEVEL_INFO,
+        };
+        payload.payload_size = 4;
+
+        if (sscanf(ctx->max_cll, "%hu|%hu",
+          &payload.payload.content_light_level.max_content_light_level,
+          &payload.payload.content_light_level.max_pic_average_light_level) == 2) {
+          err = ff_cbs_h265_add_sei_message(au, &payload);
+          if (err < 0) {
+            av_log(bsf, AV_LOG_ERROR, "Failed to add HEVC_SEI_TYPE_CONTENT_LIGHT_LEVEL_INFO SEI "
+              "message to access unit.\n");
+            goto fail;
+          }
+        }
+      }
+
+      if (ctx->mastering_display_color_volume) {
+        H265RawSEIPayload payload = {
+            .payload_type = HEVC_SEI_TYPE_MASTERING_DISPLAY_INFO,
+        };
+        payload.payload_size = 24;
+
+        if (sscanf(ctx->mastering_display_color_volume,
+          "G(%hu|%hu)B(%hu|%hu)R(%hu|%hu)WP(%hu|%hu)L(%u|%u)",
+          &payload.payload.mastering_display.display_primaries_x[0],
+          &payload.payload.mastering_display.display_primaries_y[0],
+          &payload.payload.mastering_display.display_primaries_x[1],
+          &payload.payload.mastering_display.display_primaries_y[1],
+          &payload.payload.mastering_display.display_primaries_x[2],
+          &payload.payload.mastering_display.display_primaries_y[2],
+          &payload.payload.mastering_display.white_point_x,
+          &payload.payload.mastering_display.white_point_y,
+          &payload.payload.mastering_display.max_display_mastering_luminance,
+          &payload.payload.mastering_display.min_display_mastering_luminance) == 10) {
+          err = ff_cbs_h265_add_sei_message(au, &payload);
+          if (err < 0) {
+            av_log(bsf, AV_LOG_ERROR, "Failed to add HEVC_SEI_TYPE_MASTERING_DISPLAY_INFO SEI "
+              "message to access unit.\n");
+            goto fail;
+          }
+        }
+      }
     }
 
     err = ff_cbs_write_packet(ctx->output, pkt, au);
@@ -480,6 +534,7 @@ static int h265_metadata_filter(AVBSFContext *bsf, AVPacket *pkt)
         goto fail;
     }
 
+    ctx->done_first_au = 1;
     err = 0;
 fail:
     ff_cbs_fragment_reset(au);
@@ -606,6 +661,13 @@ static const AVOption h265_metadata_options[] = {
     { "crop_bottom", "Set bottom border crop offset",
         OFFSET(crop_bottom), AV_OPT_TYPE_INT,
         { .i64 = -1 }, -1, HEVC_MAX_HEIGHT, FLAGS },
+
+    { "max_cll", "Content light level for hdr. example 1000|800",
+        OFFSET(max_cll), AV_OPT_TYPE_STRING,
+        { .str = NULL }, .flags = FLAGS },
+    { "master_display", "Mastering display color volume for hdr.",
+        OFFSET(mastering_display_color_volume), AV_OPT_TYPE_STRING,
+        { .str = NULL }, .flags = FLAGS },
 
     { "level", "Set level (tables A.6 and A.7)",
         OFFSET(level), AV_OPT_TYPE_INT,

@@ -26,6 +26,7 @@
 
 #include "cbs.h"
 #include "cbs_internal.h"
+#include "cbs_h265.h"
 
 
 static const CodedBitstreamType *cbs_type_table[] = {
